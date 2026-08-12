@@ -10,12 +10,36 @@ Script-Fu (Scheme) を実行して画像の加工・構造の把握・プレビ�
 | ツール | 概要 |
 | --- | --- |
 | `RunScriptFu` | 生の Script-Fu (Scheme) コードを実行するエスケープハッチ。画像の読み込み・加工・保存などを自由に記述できる |
-| `GetImageInfo` | 画像ファイルの構成（サイズ・全レイヤーのツリー、グループは再帰展開）を JSON で返す |
+| `GetImageInfo` | 画像ファイルの構成（サイズ・全レイヤーのツリー、グループは再帰展開）を JSON で返す。テキストレイヤーは `type:"text"` となり、font/fontSize/color/justification/text 等の属性も併せて返す |
+| `ListTextLayers` | 画像内のテキストレイヤーのみを平坦リストで返す。`GetImageInfo` より軽量で、`EditTextLayers` を適用する前の対象把握に使う |
+| `EditTextLayers` | 複数のテキストレイヤーを1呼出でバッチ編集し、`savePath`（省略時は上書き）に保存する。省略した項目は現状維持 |
 | `ExportPreview` | 画像を PNG として書き出す（縦横比を保った縮小・表示レイヤー絞り込み可） |
 
 `GimpTools` の各ツールは `gimp-console` のバッチ実行を介して GIMP 3 を操作します。
-LLM が自力では書きにくい処理（レイヤーグループの再帰走査など）をツール側に固定化するのが
-高レベルツールの狙いです。各ツールの詳細な利用条件はツールの Description を参照してください。
+LLM が自力では書きにくい処理（レイヤーグループの再帰走査・テキスト属性の設定等）をツール側に
+固定化するのが高レベルツールの狙いです。各ツールの詳細な利用条件はツールの Description を
+参照してください。
+
+### テキストレイヤーの編集フロー
+
+```
+GetImageInfo / ListTextLayers   →  EditTextLayers       →  ExportPreview
+  対象レイヤーIDと属性を把握       指定項目のみ更新し保存    書き出して目視確認
+```
+
+`EditTextLayers` の `edits` 引数は JSON 配列で、各要素に `layerId` と変更したい項目だけを
+指定します。省略した項目は現状維持されるため、フォントだけ変えたい場合等に便利です。
+
+```jsonc
+[
+  { "layerId": 4,  "text": "新しいテキスト", "fontSize": 64 },
+  { "layerId": 16, "color": "#FF8800", "justification": "center" }
+]
+```
+
+指定可能な項目: `text`, `font`, `fontSize`, `color`(`#RRGGBB` or `#RRGGBBAA`),
+`justification`(`left`/`right`/`center`/`fill`), `lineSpacing`, `letterSpacing`,
+`antialias`, `visible`, `opacity`
 
 ## 前提 / 要件
 

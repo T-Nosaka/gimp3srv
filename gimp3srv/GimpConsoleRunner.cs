@@ -59,7 +59,7 @@ public class GimpConsoleRunner
         };
         psi.ArgumentList.Add("-i");                       // GUIウィンドウを開かない
         psi.ArgumentList.Add("-d");                        // データ(タイル等)を読み込まない高速化オプション
-        psi.ArgumentList.Add("-f");                        // フォントを読み込まない高速化オプション
+        //psi.ArgumentList.Add("-f");                      // フォント未読込(テキスト編集で必要になるため外す)
         psi.ArgumentList.Add("--batch-interpreter=plug-in-script-fu-eval");
         psi.ArgumentList.Add("--batch=-");                  // 標準入力からScheme式を読み込む
 
