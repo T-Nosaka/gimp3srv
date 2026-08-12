@@ -1,0 +1,20 @@
+# Visual Studio directories
+.vs/
+
+# Build outputs
+gimp3srv/bin/
+gimp3srv/obj/
+gimp3srv/logs/
+
+claude/gimp3srv/gimp3srv.mcpb
+claude/gimp3srv/win-x64
+
+# User-specific files
+gimp3srv/gimp3srv.csproj.user
+gimp3srv/gimp3srv.csproj.lscache
+
+# IDE cache and settings
+.vscode/
+*.suo
+*.user
+

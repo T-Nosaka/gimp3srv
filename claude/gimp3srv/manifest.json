@@ -1,0 +1,30 @@
+{
+  "manifest_version": "0.2",
+  "name": "gimp3srv",
+  "version": "1.0.0",
+  "description": "Gimp3 mcp server",
+  "author": {
+    "name": "T.Nosaka"
+  },
+  "user_config": {
+    "gimpconsolepath": {
+      "type": "string",
+      "title": "gimpconsole path",
+      "description": "required gimp console execute path",
+      "sensitive": false,
+      "required": true
+    }
+  },
+  "server": {
+    "type": "binary",
+    "entry_point": "win-x64/gimp3srv.exe",
+    "mcp_config": {
+      "command": "${__dirname}/win-x64/gimp3srv.exe",
+      "args": [
+        "--gimpconsolepath",
+        "${user_config.gimpconsolepath}"
+      ]
+    }
+  },
+  "license": "MIT"
+}
