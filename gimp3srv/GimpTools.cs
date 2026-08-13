@@ -503,4 +503,204 @@ public class GimpTools
                $"[stdout]\n{result.StdOut}\n" +
                $"[stderr]\n{result.StdErr}";
     }
+
+    [McpServerTool, Description(
+        "画像内のレイヤーを検索する。名前(部分一致)または正規表現で検索し、" +
+        "マッチしたレイヤーのID・名前・サイズ・オフセット等をJSON配列で返す。" +
+        "グループ内も再帰的に検索する。")]
+    public async Task<string> FindLayer(
+        [Description("読み込む画像ファイルの絶対パス")] string filePath,
+        [Description("検索するレイヤー名(部分一致)")] string name = "",
+        [Description("正規表現パターン")] string pattern = "",
+        [Description("表示中のレイヤーのみ検索するか(既定 false)")] bool visibleOnly = false,
+        [Description("タイムアウト秒数(既定60秒)")] int timeoutSeconds = 60)
+    {
+        var path = GimpScriptHelper.ToSchemeString(filePath);
+        var searchName = !string.IsNullOrEmpty(name) ? GimpScriptHelper.ToSchemeString(name) : "";
+        var searchPattern = !string.IsNullOrEmpty(pattern) ? GimpScriptHelper.ToSchemeString(pattern) : "";
+        var visibleOnlyScheme = visibleOnly ? "#t" : "#f";
+
+        var code = GimpScriptHelper.CommonSchemePrelude + $$"""
+
+; 文字列包含チェック(TinyScheme には string-contains がない)
+(define (str-contains haystack needle)
+  (let ((hlen (string-length haystack))
+        (nlen (string-length needle)))
+    (let loop ((i 0))
+      (cond ((> (+ i nlen) hlen) #f)
+            ((string=? (substring haystack i (+ i nlen)) needle) #t)
+            (else (loop (+ i 1)))))))
+
+; レイヤー情報JSONを組み立てる
+(define (layer-info-json layer-obj)
+  (let* ((id (vector-ref layer-obj 0))
+         (name (car (gimp-item-get-name id)))
+         (is-group (= (car (gimp-item-is-group id)) TRUE))
+         (offsets (gimp-drawable-get-offsets id)))
+    (string-append "{\"id\":" (number->string id)
+      ",\"name\":\"" (json-escape name) "\""
+      ",\"isGroup\":" (if is-group "true" "false")
+      ",\"visible\":" (bool->json (car (gimp-item-get-visible id)))
+      ",\"opacity\":" (number->string (car (gimp-layer-get-opacity id)))
+      ",\"width\":" (number->string (car (gimp-drawable-get-width id)))
+      ",\"height\":" (number->string (car (gimp-drawable-get-height id)))
+      ",\"offsetX\":" (number->string (car offsets))
+      ",\"offsetY\":" (number->string (cadr offsets))
+      "}")))
+
+; レイヤーリストを走査し、条件にマッチするものを収集
+(define (find-matching-layers layer-list search-name search-pattern visible-only)
+  (let loop ((lst layer-list) (acc "[") (first #t))
+    (if (null? lst)
+        (string-append acc "]")
+        (let* ((layer-obj (car lst))
+               (id (vector-ref layer-obj 0))
+               (name (car (gimp-item-get-name id)))
+               (is-group (= (car (gimp-item-is-group id)) TRUE))
+               (visible (= (car (gimp-item-get-visible id)) TRUE))
+               (name-match (or (string=? search-name "")
+                               (str-contains name search-name)))
+               (pattern-match (or (string=? search-pattern "")
+                                  (str-contains name search-pattern)))
+               (visible-match (or (not visible-only) visible))
+               (match (and name-match pattern-match visible-match)))
+          (if is-group
+              (let ((child-results (if match
+                                       (layer-info-json layer-obj)
+                                       ""))
+                    (group-results (find-matching-layers
+                                    (gimp-item-get-children id)
+                                    search-name search-pattern visible-only)))
+                (loop (cdr lst)
+                      (string-append acc
+                                     (if (and match (not (string=? acc "["))) "," "")
+                                     child-results
+                                     (if (and (not (string=? group-results "[]"))
+                                              (not (string=? acc "[")))
+                                         "," "")
+                                     (if (not (string=? group-results "[]"))
+                                         group-results
+                                         ""))
+                      #f))
+              (loop (cdr lst)
+                    (string-append acc
+                                   (if (and match (not (string=? acc "["))) "," "")
+                                   (if match (layer-info-json layer-obj) ""))
+                    #f))))))
+
+(let* ((image (car (gimp-file-load RUN-NONINTERACTIVE "{{path}}" "{{path}}")))
+       (layers (gimp-image-get-layers image))
+       (results (find-matching-layers layers "{{searchName}}" "{{searchPattern}}" {{visibleOnlyScheme}})))
+  (gimp-message (string-append "RESULT_JSON:{\"layers\":" results "}"))
+  (gimp-image-delete image))
+""";
+
+        var result = await _runner.RunScriptFuAsync(code, timeoutSeconds);
+        var json = GimpScriptHelper.ExtractResultJson(result.StdErr);
+
+        if (json != null)
+        {
+            return json;
+        }
+
+        return $"[status] FAILED (レイヤー検索に失敗しました)\n" +
+               $"[exitCode] {result.ExitCode}\n" +
+               $"[stdout]\n{result.StdOut}\n" +
+               $"[stderr]\n{result.StdErr}";
+    }
+
+    [McpServerTool, Description(
+        "画像ファイルをレイヤーとしてインポートする。" +
+        "PNG/JPEG等の画像を読み込み、指定のXCFファイルに新しいレイヤーとして追加する。" +
+        "scaleToFit=trueの場合、ターゲットレイヤーと同じサイズ/位置に自動調整する。" +
+        "新規レイヤーはターゲットの直上に挿入される。")]
+    public async Task<string> ImportImageAsLayer(
+        [Description("書き込み先のXCFファイルの絶対パス")] string filePath,
+        [Description("インポートする画像ファイルの絶対パス")] string imagePath,
+        [Description("ターゲットレイヤー名(指定時はそのレイヤーのサイズ/位置に合わせる)")] string targetLayerName = "",
+        [Description("ターゲットレイヤーのサイズ/位置に合わせるか(既定 true)")] bool scaleToFit = true,
+        [Description("タイムアウト秒数(既定120秒)")] int timeoutSeconds = 120)
+    {
+        var targetPath = GimpScriptHelper.ToSchemeString(filePath);
+        var sourcePath = GimpScriptHelper.ToSchemeString(imagePath);
+        var targetName = !string.IsNullOrEmpty(targetLayerName) ? GimpScriptHelper.ToSchemeString(targetLayerName) : "";
+
+        // ターゲットレイヤー検索・配置のScript-Fuコードを動的に構築
+        var targetCode = !string.IsNullOrEmpty(targetLayerName)
+            ? $"""
+(let ((target-obj (find-target (gimp-image-get-layers target-img) "{targetName}")))
+    (if target-obj
+        (let ((target-id (vector-ref target-obj 0))
+              (tw (car (gimp-drawable-get-width new-layer)))
+              (th (car (gimp-drawable-get-height new-layer)))
+              (target-w (car (gimp-drawable-get-width target-id)))
+              (target-h (car (gimp-drawable-get-height target-id)))
+              (offsets (gimp-drawable-get-offsets target-id)))
+          {(scaleToFit ? "(gimp-layer-scale new-layer target-w target-h TRUE)" : "")}
+          (gimp-layer-set-offsets new-layer (car offsets) (cadr offsets))
+          (let ((pos (car (gimp-image-get-position target-img target-id))))
+            (gimp-image-insert-layer target-img new-layer #f (+ pos 1))))
+        (begin
+          (gimp-message (string-append "WARNING: target layer not found: {targetName}"))
+          (gimp-image-insert-layer target-img new-layer #f 0))))
+"""
+            : "(gimp-image-insert-layer target-img new-layer #f 0)";
+
+        var code = GimpScriptHelper.CommonSchemePrelude + $$"""
+
+; ターゲットレイヤーを検索(グループ内も再帰)
+(define (find-target layer-list name)
+  (let loop ((lst layer-list))
+    (if (null? lst)
+        #f
+        (let* ((layer-obj (car lst))
+               (id (vector-ref layer-obj 0))
+               (lname (car (gimp-item-get-name id)))
+               (is-group (= (car (gimp-item-is-group id)) TRUE)))
+          (if (string=? lname name)
+              layer-obj
+              (if is-group
+                  (let ((result (find-target (gimp-item-get-children id) name)))
+                    (if result result (loop (cdr lst))))
+                  (loop (cdr lst))))))))
+
+(let* ((target-img (car (gimp-file-load RUN-NONINTERACTIVE "{{targetPath}}" "{{targetPath}}")))
+       (source-img (car (gimp-file-load RUN-NONINTERACTIVE "{{sourcePath}}" "{{sourcePath}}")))
+       (source-layers (gimp-image-get-layers source-img))
+       (source-layer-obj (car source-layers))
+       (source-id (vector-ref source-layer-obj 0))
+       (new-layer (car (gimp-layer-new-from-drawable source-id target-img)))
+       (new-name (string-append (car (gimp-item-get-name new-layer)) "_imported")))
+  (gimp-item-set-name new-layer new-name)
+" + targetCode + @"
+  (gimp-image-delete source-img)
+  (let ((new-w (car (gimp-drawable-get-width new-layer)))
+        (new-h (car (gimp-drawable-get-height new-layer)))
+        (new-offsets (gimp-drawable-get-offsets new-layer)))
+    (gimp-message (string-append
+      "RESULT_JSON:{\"success\":true"
+      ",\"layerId\":" (number->string new-layer)
+      ",\"layerName\":\"" (json-escape new-name) "\""
+      ",\"width\":" (number->string new-w)
+      ",\"height\":" (number->string new-h)
+      ",\"offsetX\":" (number->string (car new-offsets))
+      ",\"offsetY\":" (number->string (cadr new-offsets))
+      "}")))
+  (gimp-xcf-save RUN-NONINTERACTIVE target-img "{{targetPath}}")
+  (gimp-image-delete target-img))
+""";
+
+        var result = await _runner.RunScriptFuAsync(code, timeoutSeconds);
+        var json = GimpScriptHelper.ExtractResultJson(result.StdErr);
+
+        if (json != null)
+        {
+            return json;
+        }
+
+        return $"[status] FAILED (インポートに失敗しました)\n" +
+               $"[exitCode] {result.ExitCode}\n" +
+               $"[stdout]\n{result.StdOut}\n" +
+               $"[stderr]\n{result.StdErr}";
+    }
 }
