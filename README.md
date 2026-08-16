@@ -108,6 +108,7 @@ OpenCode を利用中の環境で、publish した `gimp3srv` 実行ファイル
     "gimp3srv": {
       "type": "local",
       "command": [
+        "cmd.exe", "/c",
         "C:\\gimp3srv\\gimp3srv.exe",
         "--gimpconsolepath",
         "C:\\Program Files\\GIMP 3\\bin\\gimp-console-3.0.exe"
@@ -116,6 +117,11 @@ OpenCode を利用中の環境で、publish した `gimp3srv` 実行ファイル
     }
   }
 }
+```
+/etc/wsl.conf
+```
+[boot]
+command = echo ':WSLInterop:M::MZ::/init:' | tee /proc/sys/fs/binfmt_misc/register
 ```
 
 - `command[0]` に publish で生成した `gimp3srv` 実行ファイルの絶対パスを指定します
